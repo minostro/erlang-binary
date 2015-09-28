@@ -11,3 +11,7 @@ Run
   ./rebar3 shell
   R = eb:exif_data_for("data/lake.JPG").
   ```
+
+Pointers
+--------
+http://www.media.mit.edu/pia/Research/deepview/exif.html

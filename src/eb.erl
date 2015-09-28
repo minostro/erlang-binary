@@ -6,6 +6,13 @@
 
 -define(SOI, 16#FFD8).
 -define(APP1, 16#FFE1).
+-define(DIRECTORY_ENTRY_PATTERN,
+  <<TagNumber:16/integer,
+    DataFormat:16/integer,
+    NumberOfComponents:32/integer,
+    Data:4/binary,
+    Rest/binary
+  >>).
 
 %%====================================================================
 %% API functions
@@ -23,7 +30,7 @@ exif_data_for(FilePath) ->
 extract_exif_data(<<?SOI:16/integer, ?APP1:16/integer, _DataAreaSize:16/integer, Rest/binary>>) ->
   {_ExifHeader, RestFromExif} = extract_exif_header(Rest),
   {_TiffHeader, RestFromTiff} = extract_tiff_header(RestFromExif),
-  extract_image_file_directory(RestFromTiff);
+  extract_image_file_directory(RestFromTiff, RestFromTiff);
 extract_exif_data(_) ->
   it_is_not_a_jpeg_file.
 
@@ -38,11 +45,17 @@ extract_tiff_header(<<ByteAlign:2/binary, TagMark:2/binary, OffsetToIFD:4/binary
   },
   {TiffHeader, Rest}.
 
-extract_image_file_directory(<<_DirectoryEntries:2/binary, Rest/binary>>) ->
-  {Directory, NewRest} = extract_directory_entry(Rest),
-  process_directory_entry(Directory, NewRest).
+extract_image_file_directory(<<DirectoryEntriesNumber:16/integer, Rest/binary>>, Original) ->
+  foo(DirectoryEntriesNumber, Rest, Original, []).
 
-extract_directory_entry(<<TagNumber:16/integer, DataFormat:16/integer, NumberOfComponents:32/integer, Data:4/bytes, Rest/binary>>) ->
+foo(1, Rest, Original, Acc) ->
+  {Acc, Rest};
+foo(DirectoryEntries, Rest, Original, Acc) ->
+  {Directory, NewRest} = extract_directory_entry(Rest),
+  NewDirectory = process_directory_entry(Directory, NewRest, Original),
+  foo(DirectoryEntries - 1, NewRest, Original, [NewDirectory | Acc]).
+
+extract_directory_entry(?DIRECTORY_ENTRY_PATTERN) ->
   {DataTypeName, BytesPerComponent} = data_type(DataFormat),
   DirectoryEntry = #{
     tag_name    => tag_name(TagNumber),
@@ -53,24 +66,48 @@ extract_directory_entry(<<TagNumber:16/integer, DataFormat:16/integer, NumberOfC
  },
  {DirectoryEntry, Rest}.
 
-process_directory_entry(#{data_type := ascii_strings, data_length := Len, data := DirectoryData} = DirectoryEntry, Rest) ->
+process_directory_entry(#{data_type := ascii_strings, data_length := Len, data := DirectoryData} = DirectoryEntry, Rest, Original) ->
   NewData = case Len > bits(4) of
     true ->
-      Offset = binary:decode_unsigned(DirectoryData) - 2,
+      erlang:display(DirectoryData),
+      Offset = binary:decode_unsigned(DirectoryData, big) - 8,
       NewLen = Len - 1,
-      <<_:Offset/binary, Data:NewLen/binary, _/binary>> = Rest,
+      <<_:Offset/binary, Data:NewLen/binary, _/binary>> = Original,
       Data;
     false ->
-      DirectoryData
+      <<Data:Len/binary, _/binary>> = DirectoryData,
+      Data
   end,
-  {DirectoryEntry#{data => NewData}, Rest};
-process_directory_entry(_, Rest) -> {undefined, Rest}.
+  DirectoryEntry#{data => NewData};
+process_directory_entry(#{data_type := unsigned_short, data_length := Len, data := DirectoryData} = DirectoryEntry, Rest, Original) ->
+  NewData = case Len > bits(4) of
+    true ->
+      Offset = binary:decode_unsigned(DirectoryData, big) - 22,
+      NewLen = Len - 1,
+      <<_:Offset/binary, Data:NewLen/binary, _/binary>> = Original,
+      Data;
+    false ->
+      <<Data:Len/binary, _/binary>> = DirectoryData,
+      Data
+  end,
+  DirectoryEntry#{data => binary:decode_unsigned(NewData)};
+process_directory_entry(_, _, _) -> undefined.
 
 
 tag_name(16#010F) -> make;
+tag_name(16#0110) -> model;
+tag_name(16#0112) -> orientation;
+tag_name(16#011A) -> x_resolution;
+tag_name(16#011B) -> y_resolution;
+tag_name(16#0128) -> resolution_unit;
+tag_name(16#0131) -> software;
+tag_name(16#0132) -> date_time;
+tag_name(16#0213) -> y_cb_cr_positioning;
 tag_name(_) -> undefined.
 
 data_type(2) -> {ascii_strings, 1};
+data_type(3) -> {unsigned_short, 2};
+data_type(5) -> {unsigned_rational, 8};
 data_type(_) -> undefined.
 
 bits(Number) -> Number.
