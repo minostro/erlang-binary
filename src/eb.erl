@@ -69,7 +69,6 @@ extract_directory_entry(?DIRECTORY_ENTRY_PATTERN) ->
 process_directory_entry(#{data_type := ascii_strings, data_length := Len, data := DirectoryData} = DirectoryEntry, Rest, Original) ->
   NewData = case Len > bits(4) of
     true ->
-      erlang:display(DirectoryData),
       Offset = binary:decode_unsigned(DirectoryData, big) - 8,
       NewLen = Len - 1,
       <<_:Offset/binary, Data:NewLen/binary, _/binary>> = Original,
